@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LogiSense AI — Incident Investigation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sidebar-bg: #101A34;
+    --sidebar-hover: #17223F;
+    --sidebar-active: #1C2B52;
+    --sidebar-text: #AEB6D6;
+    --sidebar-text-active: #FFFFFF;
+    --page-bg: #F5F6FA;
+    --card-bg: #FFFFFF;
+    --border: #E6E8F0;
+    --text: #14172B;
+    --text-dim: #6B7180;
+    --text-faint: #9AA0AF;
+    --brand: #3652E3;
+    --brand-dim: #EEF0FD;
+    --low: #1F9D63;
+    --medium: #D69A1D;
+    --high: #E0562F;
+    --critical: #C63C3C;
+    --bad: #D64545;
+    --good: #1F9D63;
+    --sans: 'Inter', -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+  *{ box-sizing: border-box; }
+  body{ margin:0; font-family: var(--sans); background: var(--page-bg); color: var(--text); }
+  a{ text-decoration:none; }
+
+  .app{ display:flex; min-height:100vh; }
+
+  /* ---------------- sidebar ---------------- */
+  .sidebar{
+    width: 224px; background: var(--sidebar-bg); flex-shrink:0;
+    display:flex; flex-direction:column; padding: 20px 12px;
+    position: sticky; top:0; height:100vh;
+  }
+  .brand{
+    display:flex; align-items:center; gap:9px; padding: 6px 10px 22px;
+    color:#fff; font-weight:700; font-size:16px; letter-spacing:0.01em;
+  }
+  .brand .dot{ width:9px; height:9px; border-radius:3px; background: var(--brand); box-shadow: 0 0 0 3px rgba(54,82,227,0.28); }
+  .nav{ list-style:none; margin:0; padding:0; flex:1; }
+  .nav li a{
+    display:flex; align-items:center; gap:11px; padding: 9px 12px; margin-bottom:2px;
+    border-radius:7px; color: var(--sidebar-text); font-size:13.5px; font-weight:500;
+    cursor:pointer; transition: background .12s, color .12s;
+  }
+  .nav li a:hover{ background: var(--sidebar-hover); color:#fff; }
+  .nav li a.active{ background: var(--sidebar-active); color: var(--sidebar-text-active); }
+  .nav li a.disabled{ opacity:0.42; cursor:default; }
+  .nav li a.disabled:hover{ background:none; color:var(--sidebar-text); }
+  .nav-section-gap{ height:14px; }
+  .user{
+    display:flex; align-items:center; gap:9px; padding:10px; border-top:1px solid #202A48; margin-top:8px;
+  }
+  .user .avatar{
+    width:28px; height:28px; border-radius:50%; background: var(--brand); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;
+  }
+  .user .who{ font-size:12.5px; color:#fff; font-weight:600; }
+  .user .role{ font-size:10.5px; color: var(--sidebar-text); }
+
+  /* ---------------- main ---------------- */
+  .main{ flex:1; min-width:0; padding: 22px 30px 60px; }
+  .crumb{ font-size:12.5px; color: var(--text-faint); margin-bottom:14px; }
+  .crumb b{ color: var(--text); font-weight:600; }
+
+  .toolbar{
+    display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;
+    background: var(--card-bg); border:1px solid var(--border); border-radius:10px;
+    padding: 12px 14px; margin-bottom: 18px;
+  }
+  .field{ display:flex; flex-direction:column; gap:5px; }
+  .field label{ font-size:10.5px; color: var(--text-faint); text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
+  .field input, .field select{
+    font-family: var(--mono); font-size:13px; padding:8px 10px; border:1px solid var(--border);
+    border-radius:6px; outline:none; min-width:140px; background:#fff; color:var(--text);
+  }
+  .field input:focus, .field select:focus{ border-color: var(--brand); }
+  .btn{
+    font-family: var(--sans); font-size:13px; font-weight:600; padding:9px 16px; border-radius:7px;
+    cursor:pointer; border:1px solid transparent;
+  }
+  .btn-primary{ background: var(--brand); color:#fff; }
+  .btn-primary:hover{ background:#2C46C7; }
+  .btn-outline{ background:#fff; border-color: var(--border); color: var(--text); }
+  .btn-outline:hover{ background:#F8F9FC; }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  #status-line{ font-family: var(--mono); font-size:12px; color: var(--text-dim); margin-top:2px; width:100%; }
+  #status-line.err{ color: var(--critical); }
+
+  /* ---------------- incidents list ---------------- */
+  .incidents-table{ background:var(--card-bg); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:20px; display:none; }
+  .incidents-table table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .incidents-table th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); padding:10px 14px; border-bottom:1px solid var(--border); background:#FAFBFD; }
+  .incidents-table td{ padding:11px 14px; border-bottom:1px solid var(--border); color:var(--text); }
+  .incidents-table tr:last-child td{ border-bottom:none; }
+  .incidents-table tr.row:hover{ background:#F8F9FF; cursor:pointer; }
+  .incidents-table .empty{ padding:26px; text-align:center; color:var(--text-faint); font-size:13px; }
+
+  /* ---------------- header ---------------- */
+  .card{ background: var(--card-bg); border:1px solid var(--border); border-radius:10px; }
+  #detail{ display:none; }
+
+  .head-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding:20px 22px 18px; }
+  .head-left{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .inc-id{ font-family: var(--mono); font-weight:700; font-size:20px; }
+  .pennant{
+    font-family: var(--sans); font-size:11px; font-weight:700; letter-spacing:.03em;
+    padding: 4px 10px 4px 12px; color:#fff; position:relative; text-transform:uppercase;
+    clip-path: polygon(0 0, 100% 0, 92% 50%, 100% 100%, 0 100%);
+  }
+  .pennant.low{ background: var(--low); }
+  .pennant.medium{ background: var(--medium); }
+  .pennant.high{ background: var(--high); }
+  .pennant.critical{ background: var(--critical); }
+  .pennant.stage{ background:#8890A6; }
+  .subtitle{ font-size:17px; font-weight:600; margin: 6px 0 8px; }
+  .meta-line{ font-family: var(--mono); font-size:12px; color: var(--text-dim); display:flex; gap:16px; flex-wrap:wrap; }
+  .meta-line span b{ color: var(--text); font-weight:600; }
+  .head-actions{ display:flex; gap:8px; flex-shrink:0; }
+
+  /* ---------------- KPI strip ---------------- */
+  .kpi-strip{ display:grid; grid-template-columns: repeat(6, 1fr); gap:12px; padding: 0 22px 20px; }
+  @media (max-width:1100px){ .kpi-strip{ grid-template-columns: repeat(3,1fr); } }
+  @media (max-width:640px){ .kpi-strip{ grid-template-columns: repeat(2,1fr); } }
+  .kpi{ border:1px solid var(--border); border-radius:9px; padding:12px 13px; background:#FCFCFE; }
+  .kpi .k-label{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.05em; font-weight:600; margin-bottom:6px; }
+  .kpi .k-value{ font-size:19px; font-weight:700; }
+  .kpi .k-sub{ font-size:11px; color: var(--text-dim); margin-top:4px; }
+  .kpi .k-delta{ font-size:11px; font-weight:700; margin-top:4px; }
+  .kpi .k-delta.bad{ color: var(--bad); }
+  .kpi .k-delta.good{ color: var(--good); }
+
+  /* ---------------- body grid ---------------- */
+  .body-grid{ display:grid; grid-template-columns: 2fr 1fr; gap:16px; padding: 0 22px 22px; align-items:start; }
+  @media (max-width:980px){ .body-grid{ grid-template-columns: 1fr; } }
+
+  .panel{ margin-bottom:16px; }
+  .panel-head{ display:flex; justify-content:space-between; align-items:center; padding:15px 18px; border-bottom:1px solid var(--border); }
+  .panel-title{ font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); }
+  .panel-body{ padding: 16px 18px 18px; }
+
+  .region-stats{ display:grid; grid-template-columns: repeat(2,1fr); gap:12px; margin-bottom:16px; }
+  .rstat .k-label{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; font-weight:600; }
+  .rstat .k-value{ font-size:16px; font-weight:700; margin-top:3px; }
+  .rstat .k-sub{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+
+  .empty-note{ font-size:12.5px; color:var(--text-faint); padding: 6px 0; }
+
+  svg text{ font-family: var(--sans); }
+
+  .insights-list{ list-style:none; margin:0; padding:0; }
+  .insights-list li{ display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:var(--text); padding:8px 0; border-bottom:1px solid var(--border); }
+  .insights-list li:last-child{ border-bottom:none; }
+  .insights-list .ic{ flex-shrink:0; font-size:13px; margin-top:1px; }
+
+  .ctx-sub{ margin-bottom:18px; }
+  .ctx-sub:last-child{ margin-bottom:0; }
+  .ctx-sub-title{ font-size:11.5px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.04em; margin-bottom:9px; }
+  .ctx-row{ display:flex; justify-content:space-between; font-size:12.5px; padding:5px 0; }
+  .ctx-row .lbl{ color:var(--text-dim); }
+  .ctx-row .val{ font-weight:600; font-family: var(--mono); }
+  .ctx-row .val.bad{ color: var(--bad); }
+  .risk-row{ display:flex; justify-content:space-between; font-size:12.5px; padding:6px 0; }
+  .risk-row .dot{ width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:7px; }
+  .risk-row .dot.on{ background: var(--critical); }
+  .risk-row .dot.off{ background: #C8CCD8; }
+
+  /* ---------------- triage panel ---------------- */
+  .triage-cols{ display:grid; grid-template-columns: 0.8fr 1.4fr 1.4fr; gap:22px; padding: 4px 18px 18px; }
+  @media (max-width:900px){ .triage-cols{ grid-template-columns: 1fr; } }
+  .triage-field{ margin-bottom:14px; }
+  .triage-field .lbl{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; font-weight:700; letter-spacing:.05em; margin-bottom:5px; }
+  .triage-field .val-lg{ font-size:16px; font-weight:700; }
+  .triage-field p{ margin:0; font-size:13px; color:var(--text); line-height:1.55; }
+  .not-triaged{ padding: 30px 18px; text-align:center; color:var(--text-faint); font-size:13px; }
+
+  .loader{ display:none; font-family: var(--mono); font-size:12px; color: var(--brand); padding: 6px 0 14px; }
+  .loader.show{ display:block; }
+  .error-box{ display:none; margin: 0 0 22px; padding:16px 18px; border:1px solid var(--critical); background:#FEF3F2; border-radius:10px; }
+  .error-box pre{ margin:0; font-family: var(--mono); font-size:12px; color:var(--critical); white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand"><span class="dot"></span>LOGISENSE</div>
+    <ul class="nav">
+      <li><a class="disabled">Overview</a></li>
+      <li><a id="nav-incidents" class="active">Incidents</a></li>
+      <li><a class="disabled">Shipments</a></li>
+      <li><a class="disabled">Investigations</a></li>
+      <li><a class="disabled">Analytics</a></li>
+      <div class="nav-section-gap"></div>
+      <li><a class="disabled">Suppliers</a></li>
+      <li><a class="disabled">Regions</a></li>
+      <div class="nav-section-gap"></div>
+      <li><a class="disabled">Alerts</a></li>
+      <li><a class="disabled">Reports</a></li>
+      <li><a class="disabled">Data Management</a></li>
+      <li><a class="disabled">Settings</a></li>
+    </ul>
+    <div class="user">
+      <div class="avatar">AU</div>
+      <div>
+        <div class="who">Admin User</div>
+        <div class="role">Phase 1 · Incident Intake</div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="crumb"><a href="#" id="crumb-incidents">Incidents</a> &nbsp;›&nbsp; <b id="crumb-current">—</b></div>
+
+    <div class="toolbar">
+      <div class="field">
+        <label>API base URL</label>
+        <input type="text" id="api-base" value="http://127.0.0.1:8000" />
+      </div>
+      <button class="btn btn-outline" id="refresh-list-btn">↻ Refresh incidents</button>
+    </div>
+    <div id="status-line"></div>
+    <div class="loader" id="loader">Contacting Gemini and awaiting triage…</div>
+
+    <div class="incidents-table" id="incidents-table">
+      <table>
+        <thead><tr><th>Incident</th><th>Type</th><th>Deviation</th><th>Region</th><th>Supplier</th><th>Detected</th><th>Triage</th></tr></thead>
+        <tbody id="incidents-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="error-box" id="error-box"><pre id="error-text"></pre></div>
+
+    <div id="detail">
+      <div class="card">
+        <div class="head-row">
+          <div>
+            <div class="head-left">
+              <span class="inc-id" id="d-inc-id">INC-—</span>
+              <span class="pennant" id="d-pennant">—</span>
+            </div>
+            <div class="subtitle" id="d-title">—</div>
+            <div class="meta-line" id="d-meta"></div>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-outline" id="back-btn">← Back to incidents</button>
+            <button class="btn btn-outline" id="rerun-btn">Re-run triage</button>
+            <button class="btn btn-outline" onclick="window.print()">Export PDF</button>
+          </div>
+        </div>
+
+        <div class="kpi-strip" id="kpi-strip"></div>
+
+        <div class="body-grid">
+          <div>
+            <div class="panel card">
+              <div class="panel-head"><span class="panel-title">Regional performance</span></div>
+              <div class="panel-body">
+                <div class="region-stats" id="region-stats"></div>
+                <div id="region-bar-wrap"></div>
+              </div>
+            </div>
+
+            <div class="panel card">
+              <div class="panel-head"><span class="panel-title">Regional trend (late rate)</span></div>
+              <div class="panel-body" id="region-trend-wrap"></div>
+            </div>
+
+            <div class="panel card">
+              <div class="panel-head"><span class="panel-title">Key insights</span></div>
+              <div class="panel-body"><ul class="insights-list" id="insights-list"></ul></div>
+            </div>
+          </div>
+
+          <div class="panel card">
+            <div class="panel-head"><span class="panel-title">Context summary</span></div>
+            <div class="panel-body" id="context-summary"></div>
+          </div>
+        </div>
+
+        <div class="panel-head" style="margin: 0 22px; border-radius:10px 10px 0 0; border:1px solid var(--border); border-bottom:none;">
+          <span class="panel-title">Triage assessment (LLM)</span>
+        </div>
+        <div class="card" style="border-radius:0 0 10px 10px; border-top:none; margin:0 22px 22px;" id="triage-panel"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const apiBase = () => $('api-base').value.replace(/\/+$/, '');
+const fmtPct = (v) => v == null ? '—' : (v * 100).toFixed(1) + '%';
+const fmtRatio = (v) => v == null ? null : v.toFixed(2) + 'x';
+const titleCase = (s) => s ? s.replaceAll('_',' ').replace(/\b\w/g, c => c.toUpperCase()) : s;
+
+// Internal state -- the user never sees or types a run_id/incident_id.
+let currentIncidentId = null;
+let currentRunId = null;
+
+function setStatus(msg, isErr){
+  const el = $('status-line');
+  el.textContent = msg || '';
+  el.classList.toggle('err', !!isErr);
+}
+function setLoading(on){
+  $('loader').classList.toggle('show', on);
+  $('refresh-list-btn').disabled = on;
+  $('rerun-btn').disabled = on;
+}
+
+/* ---------------- incidents list ---------------- */
+function statusBadge(row){
+  if (!row.latest_run_id) return '<span style="color:#9AA0AF;">Not triaged</span>';
+  if (row.latest_status === 'completed'){
+    const sev = row.latest_severity || 'medium';
+    const colors = {low:'#1F9D63', medium:'#D69A1D', high:'#E0562F', critical:'#C63C3C'};
+    return `<span style="color:${colors[sev]||'#6B7180'}; font-weight:700; text-transform:uppercase; font-size:11.5px;">${sev}</span>`;
+  }
+  if (row.latest_status === 'failed') return '<span style="color:#C63C3C;">Failed — click to retry</span>';
+  return '<span style="color:#9AA0AF;">In progress…</span>';
+}
+
+async function loadIncidentsList(){
+  setStatus('Loading incidents…');
+  $('detail').style.display = 'none';
+  $('error-box').style.display = 'none';
+  currentIncidentId = null;
+  currentRunId = null;
+  try{
+    const res = await fetch(`${apiBase()}/incidents?limit=50`);
+    const rows = await res.json();
+    if (!rows.length){
+      $('incidents-table').innerHTML = '<div class="empty">No incidents yet. Run <code>detect-incidents</code> after loading data.</div>';
+    } else {
+      $('incidents-table').innerHTML = '<table><thead><tr><th>Incident</th><th>Type</th><th>Deviation</th><th>Region</th><th>Supplier</th><th>Detected</th><th>Triage</th></tr></thead><tbody id="incidents-tbody"></tbody></table>';
+      const tb = $('incidents-tbody');
+      tb.innerHTML = rows.map(r => `
+        <tr class="row" data-id="${r.incident_id}" data-run-id="${r.latest_run_id || ''}" data-status="${r.latest_status || ''}">
+          <td>INC-${r.incident_id}</td>
+          <td>${titleCase(r.incident_type)}</td>
+          <td>${r.deviation_value ?? '—'} days</td>
+          <td>${r.region || '—'}</td>
+          <td>${r.supplier || '—'}</td>
+          <td>${r.detected_at.slice(0,10)}</td>
+          <td>${statusBadge(r)}</td>
+        </tr>`).join('');
+      tb.querySelectorAll('tr.row').forEach(tr => {
+        tr.addEventListener('click', () => openIncident(
+          Number(tr.dataset.id),
+          tr.dataset.runId || null,
+          tr.dataset.status || null,
+        ));
+      });
+    }
+    $('incidents-table').style.display = 'block';
+    $('crumb-current').textContent = 'All incidents';
+    setStatus('');
+  } catch(err){
+    setStatus(err.message, true);
+  }
+}
+
+/* ---------------- open / run an incident (fully internal) ---------------- */
+async function openIncident(incidentId, existingRunId, existingStatus){
+  currentIncidentId = incidentId;
+  setLoading(true);
+  $('error-box').style.display = 'none';
+
+  try{
+    if (existingRunId && existingStatus === 'completed'){
+      // Already triaged -- just display it, no new Gemini call.
+      setStatus(`Loading existing triage for INC-${incidentId}…`);
+      const detail = await fetchRun(existingRunId);
+      currentRunId = existingRunId;
+      renderDetail(detail);
+      setStatus(`INC-${incidentId} — showing existing triage`);
+    } else {
+      await triageIncident(incidentId);
+    }
+  } catch(err){
+    setStatus(err.message, true);
+  } finally{
+    setLoading(false);
+  }
+}
+
+async function triageIncident(incidentId){
+  setStatus(`Running Phase 1 triage for INC-${incidentId}…`);
+  const createRes = await fetch(`${apiBase()}/investigations`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({incident_id: incidentId})
+  });
+  const created = await createRes.json();
+  if (!createRes.ok) throw new Error(created.detail || `HTTP ${createRes.status}`);
+  currentRunId = created.run_id;
+  const detail = await fetchRun(created.run_id);
+  if (detail.status === 'failed'){
+    renderError(created.run_id, detail.error_message || 'Investigation failed with no error message.');
+    setStatus(`INC-${incidentId} — triage failed`, true);
+  } else {
+    renderDetail(detail);
+    setStatus(`INC-${incidentId} — triage complete`);
+  }
+}
+
+/* ---------------- charts (hand-rolled SVG, no deps) ---------------- */
+function barChart(rows){
+  if (!rows.length) return '<div class="empty-note">No regional comparison data available for this dataset.</div>';
+  const w = 480, barH = 22, gap = 14, leftLabel = 130, chartW = w - leftLabel - 60;
+  const maxRate = Math.max(0.05, ...rows.map(r => r.late_rate || 0));
+  const h = rows.length * (barH + gap);
+  let bars = '';
+  rows.forEach((r, i) => {
+    const y = i * (barH + gap);
+    const bw = maxRate ? (r.late_rate || 0) / maxRate * chartW : 0;
+    const color = r.is_baseline ? '#9AA0AF' : (r.is_current ? '#3652E3' : '#B9C2F5');
+    bars += `
+      <text x="${leftLabel-10}" y="${y+barH/2+4}" text-anchor="end" font-size="11.5" fill="${r.is_current?'#14172B':'#6B7180'}" font-weight="${r.is_current?700:500}">${r.region}</text>
+      <rect x="${leftLabel}" y="${y}" width="${chartW}" height="${barH}" rx="4" fill="#F2F3F8"/>
+      <rect x="${leftLabel}" y="${y}" width="${bw}" height="${barH}" rx="4" fill="${color}"/>
+      <text x="${leftLabel+bw+8}" y="${y+barH/2+4}" font-size="11.5" fill="#14172B" font-weight="600">${fmtPct(r.late_rate)}</text>
+    `;
+  });
+  return `<svg viewBox="0 0 ${w} ${h+4}" width="100%" style="max-width:${w}px">${bars}</svg>`;
+}
+
+function lineChart(series){
+  if (!series.length) return '<div class="empty-note">No trend data available for this region yet.</div>';
+  const w = 560, h = 170, padL = 34, padB = 22, padT = 12, padR = 10;
+  const chartW = w - padL - padR, chartH = h - padT - padB;
+  const maxRate = Math.max(0.1, ...series.map(s => s.late_rate || 0));
+  const stepX = series.length > 1 ? chartW / (series.length - 1) : 0;
+  const pts = series.map((s,i) => {
+    const x = padL + i*stepX;
+    const y = padT + chartH - (s.late_rate||0)/maxRate*chartH;
+    return [x,y];
+  });
+  const path = pts.map((p,i) => (i===0?'M':'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const area = path + ` L${pts[pts.length-1][0].toFixed(1)},${padT+chartH} L${pts[0][0].toFixed(1)},${padT+chartH} Z`;
+  const gridLines = [0,0.5,1].map(f => {
+    const y = padT + chartH*(1-f);
+    return `<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}" stroke="#EEF0F5" stroke-width="1"/>
+            <text x="4" y="${y+3}" font-size="10" fill="#9AA0AF">${(maxRate*f*100).toFixed(0)}%</text>`;
+  }).join('');
+  const dots = pts.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="#3652E3"/>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" style="max-width:${w}px">
+    ${gridLines}
+    <path d="${area}" fill="rgba(54,82,227,0.08)" stroke="none"/>
+    <path d="${path}" fill="none" stroke="#3652E3" stroke-width="2"/>
+    ${dots}
+  </svg>
+  <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text-faint);padding:0 34px 0 34px;">
+    <span>${series[0].week_ending}</span><span>${series[series.length-1].week_ending}</span>
+  </div>`;
+}
+
+/* ---------------- KPI + detail rendering ---------------- */
+function kpiCard(label, value, sub, deltaText, deltaClass){
+  return `<div class="kpi">
+    <div class="k-label">${label}</div>
+    <div class="k-value">${value}</div>
+    ${sub ? `<div class="k-sub">${sub}</div>` : ''}
+    ${deltaText ? `<div class="k-delta ${deltaClass}">${deltaText}</div>` : ''}
+  </div>`;
+}
+
+function renderDetail(data){
+  $('incidents-table').style.display = 'none';
+  $('error-box').style.display = 'none';
+  $('detail').style.display = 'block';
+  $('crumb-current').textContent = `INC-${data.incident_id}`;
+
+  const cm = data.contextual_metrics || {};
+  const overall = cm.overall || {};
+  const supplier = cm.supplier;
+  const region = cm.region;
+  const mode = cm.shipping_mode;
+  const biz = cm.business_impact || {};
+  const signals = cm.signals || {};
+  const op = data.operational_details || {};
+  const bizCtx = data.business_context || {};
+
+  // ---- header ----
+  $('d-inc-id').textContent = `INC-${data.incident_id}`;
+  $('d-title').textContent = data.incident_type ? titleCase(data.incident_type) + ' Incident' : 'Delivery Incident';
+  const pennant = $('d-pennant');
+  if (data.severity){
+    pennant.className = 'pennant ' + data.severity;
+    pennant.textContent = data.severity + ' priority';
+  } else {
+    pennant.className = 'pennant stage';
+    pennant.textContent = data.status === 'failed' ? 'Failed' : (data.status || 'pending');
+  }
+  $('d-meta').innerHTML = `
+    <span>Delay: <b>${op.delay_days ?? '—'} days</b></span>
+    <span>Expected: <b>${op.expected_delivery_date ?? '—'}</b></span>
+    <span>Actual: <b>${op.actual_delivery_date ?? '—'}</b></span>
+    <span>Supplier: <b>${bizCtx.supplier || 'Not available'}</b></span>
+    <span>Region: <b>${bizCtx.region || '—'}</b></span>
+    <span>Mode: <b>${op.shipping_mode || 'Not available'}</b></span>
+  `;
+
+  // ---- KPI strip ----
+  let kpis = '';
+  kpis += kpiCard('Delay', `${op.delay_days ?? '—'} days`, `Expected ${op.expected_delivery_date ?? '—'}`);
+  kpis += kpiCard('Overall late rate', fmtPct(overall.late_rate),
+    `${overall.late_shipment_count ?? '—'} / ${overall.shipment_count ?? '—'} shipments`);
+  if (supplier){
+    kpis += kpiCard('Supplier late rate', fmtPct(supplier.late_rate),
+      `${supplier.late_shipment_count} / ${supplier.shipment_count} shipments`,
+      supplier.late_rate_ratio!=null ? `▲ ${fmtRatio(supplier.late_rate_ratio)} vs overall` : null,
+      supplier.late_rate_ratio > 1 ? 'bad' : 'good');
+  } else {
+    kpis += kpiCard('Supplier late rate', 'N/A', 'No supplier concept in this dataset');
+  }
+  if (region){
+    kpis += kpiCard('Region late rate', fmtPct(region.late_rate),
+      `${region.late_shipment_count} / ${region.shipment_count} shipments`,
+      region.late_rate_ratio!=null ? `▲ ${fmtRatio(region.late_rate_ratio)} vs overall` : null,
+      region.late_rate_ratio > 1 ? 'bad' : 'good');
+  } else {
+    kpis += kpiCard('Region late rate', 'N/A', 'No region data available');
+  }
+  kpis += kpiCard('Order value', biz.order_value != null ? biz.order_value.toLocaleString() : '—',
+    biz.order_value_percentile != null ? `Top ${(100-biz.order_value_percentile).toFixed(0)}% of orders` : null);
+  kpis += kpiCard('Investigation priority', data.priority ? data.priority.toUpperCase() : 'Pending',
+    data.priority ? 'From LLM triage' : 'Run triage to populate');
+  $('kpi-strip').innerHTML = kpis;
+
+  // ---- regional performance ----
+  if (region){
+    $('region-stats').innerHTML = `
+      <div class="rstat"><div class="k-label">Shipments (region)</div><div class="k-value">${region.shipment_count}</div></div>
+      <div class="rstat"><div class="k-label">Late rate</div><div class="k-value">${fmtPct(region.late_rate)}</div><div class="k-sub">vs ${fmtPct(overall.late_rate)} overall</div></div>
+      <div class="rstat"><div class="k-label">Late shipments</div><div class="k-value">${region.late_shipment_count}</div></div>
+      <div class="rstat"><div class="k-label">Avg delay</div><div class="k-value">${region.average_delay_days ?? '—'} d</div><div class="k-sub">vs ${overall.average_delay_days ?? '—'} d overall</div></div>
+    `;
+  } else {
+    $('region-stats').innerHTML = '<div class="empty-note">No region data available for this dataset.</div>';
+  }
+  $('region-bar-wrap').innerHTML = barChart(data.region_comparison || []);
+  $('region-trend-wrap').innerHTML = lineChart(data.region_trend || []);
+
+  // ---- key insights ----
+  const insights = [];
+  if (signals.delay_vs_average != null)
+    insights.push(['⏱', `This shipment is ${fmtRatio(signals.delay_vs_average)} the overall average delay.`]);
+  if (signals.supplier_performance)
+    insights.push(['📦', `Supplier performance is <b>${signals.supplier_performance.replace('_',' ')}</b> relative to the network baseline.`]);
+  if (signals.regional_performance)
+    insights.push(['📍', `Regional performance is <b>${signals.regional_performance.replace('_',' ')}</b> relative to the network baseline.`]);
+  if (signals.supplier_trend)
+    insights.push(['📈', `Supplier late-rate trend over the last period: <b>${signals.supplier_trend}</b>.`]);
+  if (signals.regional_trend)
+    insights.push(['📈', `Regional late-rate trend over the last period: <b>${signals.regional_trend}</b>.`]);
+  if (biz.order_value_percentile != null && biz.order_value_percentile >= 90)
+    insights.push(['💰', `This order is in the top 10% by value (${biz.order_value_percentile.toFixed(0)}th percentile).`]);
+  $('insights-list').innerHTML = insights.length
+    ? insights.map(([ic,txt]) => `<li><span class="ic">${ic}</span><span>${txt}</span></li>`).join('')
+    : '<li><span class="ic">—</span><span>Not enough contextual data to derive insights.</span></li>';
+
+  // ---- context summary ----
+  let ctx = '';
+  ctx += `<div class="ctx-sub"><div class="ctx-sub-title">Supplier performance</div>`;
+  ctx += supplier ? `
+      <div class="ctx-row"><span class="lbl">Late rate</span><span class="val">${fmtPct(supplier.late_rate)}</span></div>
+      <div class="ctx-row"><span class="lbl">Avg delay</span><span class="val">${supplier.average_delay_days ?? '—'} d</span></div>
+      <div class="ctx-row"><span class="lbl">vs overall</span><span class="val bad">${fmtRatio(supplier.late_rate_ratio) ?? '—'}</span></div>
+    ` : `<div class="empty-note">Not available — this dataset has no supplier/seller concept.</div>`;
+  ctx += `</div>`;
+
+  ctx += `<div class="ctx-sub"><div class="ctx-sub-title">Shipping mode performance</div>`;
+  ctx += mode ? `
+      <div class="ctx-row"><span class="lbl">Mode</span><span class="val">${mode.label}</span></div>
+      <div class="ctx-row"><span class="lbl">Late rate</span><span class="val">${fmtPct(mode.late_rate)}</span></div>
+      <div class="ctx-row"><span class="lbl">Avg delay</span><span class="val">${mode.average_delay_days ?? '—'} d</span></div>
+    ` : `<div class="empty-note">Not available for this shipment/dataset.</div>`;
+  ctx += `</div>`;
+
+  ctx += `<div class="ctx-sub"><div class="ctx-sub-title">Business impact</div>
+      <div class="ctx-row"><span class="lbl">Order value</span><span class="val">${biz.order_value != null ? biz.order_value.toLocaleString() : '—'}</span></div>
+      <div class="ctx-row"><span class="lbl">Quantity</span><span class="val">${biz.quantity ?? '—'}</span></div>
+      <div class="ctx-row"><span class="lbl">Value percentile</span><span class="val">${biz.order_value_percentile != null ? biz.order_value_percentile.toFixed(0)+'th' : '—'}</span></div>
+    </div>`;
+
+  const highValue = biz.order_value_percentile != null && biz.order_value_percentile >= 90;
+  ctx += `<div class="ctx-sub"><div class="ctx-sub-title">Residual risk indicators</div>
+      <div class="risk-row"><span><span class="dot ${highValue?'on':'off'}"></span>High-value order</span><span>${highValue ? 'Yes' : 'No'}</span></div>
+    </div>`;
+  $('context-summary').innerHTML = ctx;
+
+  // ---- triage panel ----
+  const tp = $('triage-panel');
+  const sevColor = {low:'#1F9D63', medium:'#D69A1D', high:'#E0562F', critical:'#C63C3C'};
+  if (data.status === 'failed'){
+    tp.innerHTML = `<div class="not-triaged">Investigation failed: ${data.error_message || 'unknown error'}</div>`;
+  } else if (!data.severity){
+    tp.innerHTML = `<div class="not-triaged">Triage not yet run for this incident.</div>`;
+  } else {
+    tp.innerHTML = `<div class="triage-cols">
+      <div>
+        <div class="triage-field"><div class="lbl">Severity</div><div class="val-lg" style="color:${sevColor[data.severity]||'#14172B'}">${data.severity.toUpperCase()}</div></div>
+        <div class="triage-field"><div class="lbl">Impact</div><div class="val-lg">${(data.impact||'—').toUpperCase()}</div></div>
+        <div class="triage-field"><div class="lbl">Priority</div><div class="val-lg">${(data.priority||'—').toUpperCase()}</div></div>
+      </div>
+      <div class="triage-field"><div class="lbl">Rationale</div><p>${data.rationale || '—'}</p></div>
+      <div>
+        <div class="triage-field"><div class="lbl">Recommended next step</div><p>${data.recommended_next_step || '—'}</p></div>
+        <div class="triage-field"><div class="lbl">Normalized summary</div><p>${data.normalized_summary || '—'}</p></div>
+      </div>
+    </div>`;
+  }
+}
+
+async function fetchRun(runId){
+  const res = await fetch(`${apiBase()}/investigations/${runId}`);
+  if (!res.ok){
+    const body = await res.json().catch(()=>({}));
+    throw new Error(body.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function renderError(runId, message){
+  $('detail').style.display = 'none';
+  $('incidents-table').style.display = 'none';
+  $('error-box').style.display = 'block';
+  $('error-text').textContent = `run_id: ${runId || '—'}\n\n${message}`;
+}
+
+$('refresh-list-btn').addEventListener('click', loadIncidentsList);
+$('nav-incidents').addEventListener('click', loadIncidentsList);
+$('crumb-incidents').addEventListener('click', (e) => { e.preventDefault(); loadIncidentsList(); });
+$('back-btn').addEventListener('click', loadIncidentsList);
+$('rerun-btn').addEventListener('click', async () => {
+  if (currentIncidentId == null) return;
+  setLoading(true);
+  try { await triageIncident(currentIncidentId); }
+  catch(err){ setStatus(err.message, true); }
+  finally { setLoading(false); }
+});
+
+const savedBase = localStorage.getItem('logisense_api_base');
+if (savedBase) $('api-base').value = savedBase;
+$('api-base').addEventListener('change', () => localStorage.setItem('logisense_api_base', $('api-base').value));
+
+loadIncidentsList();
+</script>
+</body>
+</html>
