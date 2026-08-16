@@ -5,8 +5,9 @@ from alembic.config import Config
 from logisense.config import get_settings
 from logisense.db import SessionLocal
 from logisense.logging import configure_logging
-from logisense.repositories import InvestigationRunRepository
-from logisense.services.gemini_client import GeminiIntakeClient
+from logisense.repositories import HypothesisRepository, InvestigationRunRepository
+from logisense.services.gemini_client import GeminiHypothesisClient, GeminiIntakeClient
+from logisense.services.hypothesis import HypothesisGenerationService
 from logisense.services.incident_detection import IncidentDetectionService
 from logisense.services.ingestion.dataco_loader import DataCoLoader
 from logisense.services.ingestion.olist_loader import OlistLoader
@@ -113,6 +114,44 @@ def start_investigation(
             if intake is not None:
                 typer.echo("")
                 typer.echo(intake.triage_assessment)
+
+
+@app.command("generate-hypotheses")
+def generate_hypotheses(
+    run_id: str = typer.Option(..., help="run_id from a completed Phase 1 investigation."),
+) -> None:
+    """Phase 2: generate candidate root-cause hypotheses for a run that
+    has already completed Phase 1 triage."""
+    settings = get_settings()
+    with SessionLocal() as session:
+        result = HypothesisGenerationService(
+            session=session,
+            model_client=GeminiHypothesisClient(settings),
+        ).generate(run_id=run_id)
+
+        typer.echo(
+            f"run_id={result.run_id} current_stage={result.current_stage} "
+            f"hypotheses={result.hypothesis_count} ruled_out={result.ruled_out_count} "
+            f"similar_past_incidents_used={result.similar_past_incidents_used}"
+        )
+
+        hypotheses = HypothesisRepository(session).get_by_run_id(result.run_id)
+        for h in hypotheses:
+            typer.echo("")
+            typer.echo(f"[{h.rank}] ({h.confidence.value.upper()} confidence) {h.statement}")
+            typer.echo(f"    Rationale: {h.rationale}")
+            typer.echo(f"    Why ranked here: {h.why_ranked_here}")
+            typer.echo(f"    Supporting signals: {h.supporting_signals}")
+            typer.echo(f"    Would confirm: {h.what_would_confirm}")
+            typer.echo(f"    Would refute: {h.what_would_refute}")
+
+        run = InvestigationRunRepository(session).get_by_run_id(result.run_id)
+        if run and run.ruled_out_hypotheses:
+            typer.echo("")
+            typer.echo("Ruled out:")
+            for item in run.ruled_out_hypotheses:
+                typer.echo(f"  - {item['statement']}")
+                typer.echo(f"    Reason: {item['reason_ruled_out']}")
 
 
 @app.command("serve")

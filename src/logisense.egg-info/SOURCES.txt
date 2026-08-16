@@ -14,6 +14,7 @@ src/logisense.egg-info/requires.txt
 src/logisense.egg-info/top_level.txt
 src/logisense/services/__init__.py
 src/logisense/services/gemini_client.py
+src/logisense/services/hypothesis.py
 src/logisense/services/incident_detection.py
 src/logisense/services/intake.py
 src/logisense/services/prompts.py

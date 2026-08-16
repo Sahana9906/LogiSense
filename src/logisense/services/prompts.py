@@ -190,3 +190,122 @@ CONTEXTUAL METRICS (pre-calculated -- do not recompute):
             return None
         parts = [p for p in [location.city, location.state, location.country] if p]
         return ", ".join(parts) if parts else location.region
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Hypothesis Agent
+#
+# Unlike Phase 1's fixed-heading human-readable text (meant to be read
+# directly by an operations user), hypotheses are inherently a list of
+# distinct, sub-structured items -- so this phase uses the GenAI SDK's
+# native structured-output support (a JSON schema) rather than free text.
+# That's a deliberate per-phase choice, not an inconsistency: the shape of
+# the desired output should drive the output mode.
+# ---------------------------------------------------------------------------
+
+HYPOTHESIS_SYSTEM_PROMPT = """You are the LogiSense AI Supply-Chain Hypothesis Agent.
+
+Your job is to generate candidate root-cause hypotheses for a supply-chain
+incident that has already been triaged (Phase 1).
+
+You will be given the Phase 1 triage assessment (incident type, severity,
+and the full triage narrative), the same pre-calculated contextual metrics
+used during triage, and -- when available -- the top hypothesis from
+similar past incidents sharing this incident's supplier and/or region. Do
+not recompute or restate statistics yourself -- only use the ones
+provided.
+
+Use the similar-past-incidents context as cross-incident memory: if a
+pattern recurs (the same kind of hypothesis reappearing for this supplier
+or region), say so explicitly and let it inform your confidence level. If
+no similar past incidents are supplied, reason from this incident alone
+and say so -- do not invent a pattern that isn't there.
+
+Generate between 2 and 5 candidate hypotheses that could explain why this
+incident occurred.
+
+Each hypothesis must be:
+- Plausible given only the supplied incident, triage, context, and
+  cross-incident memory data.
+- Testable/falsifiable: state what evidence would confirm it and what
+  evidence would refute it.
+- Clearly NOT a confirmed root cause -- these are candidates for a human
+  investigator to check, not conclusions.
+- Accompanied by an explicit explanation of why it sits at its rank
+  relative to the other hypotheses you generated (why_ranked_here) --
+  ranking must be justified, not silent.
+
+Do not invent facts that are not present in the supplied data.
+Do not treat any single hypothesis as certain.
+Assign each hypothesis a qualitative confidence level (low | medium |
+high) reflecting how well the available signals support it -- this must
+be your own contextual judgment, not a hardcoded rule or numeric
+probability. Order hypotheses from most to least plausible.
+
+Additionally, list (in "ruled_out") any plausible-sounding explanations
+you considered but did not include as a full hypothesis, with a short
+reason each was ruled out (e.g. contradicted by a specific signal, or
+redundant with a stronger hypothesis already listed). This can be an
+empty list if you considered no other explanations worth mentioning.
+
+Return the required structured result -- no additional commentary outside
+the structured fields."""
+
+
+@dataclass(frozen=True)
+class HypothesisPrompt:
+    system: str
+    user: str
+
+    @property
+    def combined(self) -> str:
+        return f"{self.system}\n\n{self.user}"
+
+
+def _format_similar_past_hypotheses(similar_past: list[dict]) -> str:
+    if not similar_past:
+        return "unavailable -- no similar past incidents found for this supplier/region"
+    lines = []
+    for item in similar_past:
+        lines.append(
+            f"- incident_type={item['incident_type']}, severity={item['severity']}, "
+            f"top_hypothesis=\"{item['top_hypothesis']}\" (confidence={item['confidence']})"
+        )
+    return "\n".join(lines)
+
+
+class HypothesisPromptBuilder:
+    def build(
+        self,
+        incident: m.Incident,
+        intake: m.IncidentIntake,
+        contextual_metrics: dict,
+        similar_past_hypotheses: list[dict] | None = None,
+    ) -> HypothesisPrompt:
+        triage_context = "\n".join(
+            [
+                f"- incident_type: {intake.incident_type}",
+                f"- severity: {intake.severity.value}",
+            ]
+        )
+
+        metrics_block = "\n".join(
+            f"- {key}: {'unavailable' if value is None else value}"
+            for key, value in _flatten(contextual_metrics or {})
+        )
+
+        similar_block = _format_similar_past_hypotheses(similar_past_hypotheses or [])
+
+        user_prompt = f"""PHASE 1 TRIAGE RESULT:
+{triage_context}
+
+PHASE 1 FULL TRIAGE ASSESSMENT:
+{intake.triage_assessment}
+
+CONTEXTUAL METRICS (pre-calculated -- do not recompute):
+{metrics_block}
+
+SIMILAR PAST INCIDENTS (same supplier/region, most recent first -- cross-incident memory):
+{similar_block}"""
+
+        return HypothesisPrompt(system=HYPOTHESIS_SYSTEM_PROMPT, user=user_prompt)

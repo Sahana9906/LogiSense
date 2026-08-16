@@ -9,8 +9,14 @@ from sqlalchemy.orm import Session
 from logisense import models as m
 from logisense.config import get_settings
 from logisense.db import get_session
-from logisense.repositories import ContextualMetricsRepository, IncidentRepository, InvestigationRunRepository
-from logisense.services.gemini_client import GeminiIntakeClient
+from logisense.repositories import (
+    ContextualMetricsRepository,
+    HypothesisRepository,
+    IncidentRepository,
+    InvestigationRunRepository,
+)
+from logisense.services.gemini_client import GeminiHypothesisClient, GeminiIntakeClient
+from logisense.services.hypothesis import HypothesisGenerationService
 from logisense.services.intake import IncidentIntakeService
 
 app = FastAPI(title="LogiSense AI - Phase 1: Incident Intake & Triage", version="1.0.0")
@@ -218,4 +224,95 @@ def get_investigation(
         contextual_metrics=run.contextual_metrics,
         region_comparison=region_comparison,
         region_trend=region_trend,
+    )
+
+
+class HypothesisItemResponse(BaseModel):
+    rank: int
+    statement: str
+    rationale: str
+    supporting_signals: str
+    confidence: str
+    what_would_confirm: str
+    what_would_refute: str
+    why_ranked_here: str
+
+
+class RuledOutHypothesisResponse(BaseModel):
+    statement: str
+    reason_ruled_out: str
+
+
+class HypothesisSetDetailResponse(BaseModel):
+    hypotheses: list[HypothesisItemResponse]
+    ruled_out: list[RuledOutHypothesisResponse]
+
+
+@app.post("/investigations/{run_id}/hypotheses", response_model=HypothesisSetDetailResponse)
+def create_hypotheses(
+    run_id: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> HypothesisSetDetailResponse:
+    settings = get_settings()
+    try:
+        HypothesisGenerationService(
+            session=session,
+            model_client=GeminiHypothesisClient(settings),
+        ).generate(run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Hypothesis generation failed: {exc}") from exc
+
+    run = InvestigationRunRepository(session).get_by_run_id(run_id)
+    hypotheses = HypothesisRepository(session).get_by_run_id(run_id)
+    return HypothesisSetDetailResponse(
+        hypotheses=[
+            HypothesisItemResponse(
+                rank=h.rank,
+                statement=h.statement,
+                rationale=h.rationale,
+                supporting_signals=h.supporting_signals,
+                confidence=h.confidence.value,
+                what_would_confirm=h.what_would_confirm,
+                what_would_refute=h.what_would_refute,
+                why_ranked_here=h.why_ranked_here,
+            )
+            for h in hypotheses
+        ],
+        ruled_out=[
+            RuledOutHypothesisResponse(**item) for item in (run.ruled_out_hypotheses or [])
+        ],
+    )
+
+
+@app.get("/investigations/{run_id}/hypotheses", response_model=HypothesisSetDetailResponse)
+def get_hypotheses(
+    run_id: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> HypothesisSetDetailResponse:
+    run = InvestigationRunRepository(session).get_by_run_id(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Investigation run not found: {run_id}")
+
+    hypotheses = HypothesisRepository(session).get_by_run_id(run_id)
+    return HypothesisSetDetailResponse(
+        hypotheses=[
+            HypothesisItemResponse(
+                rank=h.rank,
+                statement=h.statement,
+                rationale=h.rationale,
+                supporting_signals=h.supporting_signals,
+                confidence=h.confidence.value,
+                what_would_confirm=h.what_would_confirm,
+                what_would_refute=h.what_would_refute,
+                why_ranked_here=h.why_ranked_here,
+            )
+            for h in hypotheses
+        ],
+        ruled_out=[
+            RuledOutHypothesisResponse(**item) for item in (run.ruled_out_hypotheses or [])
+        ],
     )

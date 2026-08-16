@@ -53,6 +53,7 @@ class InvestigationRunStatus(str, Enum):
 class InvestigationStage(str, Enum):
     INCIDENT_INTAKE = "incident_intake"
     READY_FOR_HYPOTHESIS = "ready_for_hypothesis"
+    HYPOTHESIS_GENERATED = "hypothesis_generated"
 
 
 class IncidentSeverity(str, Enum):
@@ -74,6 +75,12 @@ class InvestigationPriority(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class HypothesisConfidence(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +247,13 @@ class InvestigationRun(Base):
     recomputing them, and gives a historical record of what informed a
     given severity call even if live metrics later drift."""
 
+    ruled_out_hypotheses: Mapped[list | None] = mapped_column(JSON)
+    """Phase 2: candidate explanations Gemini considered and explicitly
+    ruled out, as [{"statement": ..., "reason_ruled_out": ...}, ...].
+    Kept separate from the `investigation_hypotheses` table since these
+    were never surviving candidates -- they're the agent's rule-out
+    reasoning, not investigation targets."""
+
     incident: Mapped[Incident] = relationship()
 
     __table_args__ = (
@@ -295,3 +309,41 @@ class IncidentIntake(Base):
     run: Mapped[InvestigationRun] = relationship()
 
     __table_args__ = (Index("ix_incident_intake_type_severity", "incident_type", "severity"),)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: hypothesis generation
+# ---------------------------------------------------------------------------
+
+class Hypothesis(Base):
+    """A single Phase 2 candidate root-cause hypothesis for a run. Never a
+    confirmed root cause -- confirmation/refutation is later phases' job
+    (evidence retrieval + verification). `rank` reflects Gemini's own
+    qualitative ordering of plausibility (1 = most plausible), not a
+    computed probability."""
+
+    __tablename__ = "investigation_hypotheses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("investigation_runs.run_id"), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_signals: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[HypothesisConfidence] = mapped_column(
+        SAEnum(HypothesisConfidence, name="hypothesis_confidence", values_callable=_enum_values),
+        nullable=False,
+    )
+    what_would_confirm: Mapped[str] = mapped_column(Text, nullable=False)
+    what_would_refute: Mapped[str] = mapped_column(Text, nullable=False)
+    why_ranked_here: Mapped[str] = mapped_column(Text, nullable=False)
+    """Why this hypothesis sits at this rank relative to the others --
+    explicit rule-out/comparison reasoning, not just a silent ordering."""
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    run: Mapped[InvestigationRun] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "rank", name="uq_hypothesis_run_rank"),
+        Index("ix_investigation_hypotheses_run", "run_id"),
+    )

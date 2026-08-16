@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from logisense import models as m
@@ -804,3 +804,121 @@ class InvestigationRunRepository(BaseRepository):
         return self.session.scalar(
             select(m.IncidentIntake).where(m.IncidentIntake.run_id == run_id)
         )
+
+    def mark_hypothesis_generated(self, run_id: str) -> None:
+        """Phase 2 completion: advance the stage marker. Status stays
+        COMPLETED (the run itself succeeded); current_stage is what tracks
+        pipeline progress across phases."""
+        run = self.get_by_run_id(run_id)
+        run.current_stage = m.InvestigationStage.HYPOTHESIS_GENERATED
+
+    def set_ruled_out_hypotheses(self, run_id: str, ruled_out: list[dict]) -> None:
+        run = self.get_by_run_id(run_id)
+        run.ruled_out_hypotheses = ruled_out
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: hypothesis persistence
+# ---------------------------------------------------------------------------
+
+class HypothesisRepository(BaseRepository):
+    def replace_hypotheses(
+        self, run_id: str, hypotheses: list[dict]
+    ) -> list[m.Hypothesis]:
+        """Delete any existing hypotheses for this run and insert the new
+        set. Re-running Phase 2 for the same run replaces its hypotheses
+        rather than accumulating duplicates -- each run represents one
+        Phase 2 pass, consistent with how Phase 1 handles re-triage (a
+        fresh `investigation_runs` row, not appended state)."""
+        self.session.execute(
+            m.Hypothesis.__table__.delete().where(m.Hypothesis.run_id == run_id)
+        )
+        rows = []
+        for rank, item in enumerate(hypotheses, start=1):
+            hypothesis = m.Hypothesis(
+                run_id=run_id,
+                rank=rank,
+                statement=item["statement"],
+                rationale=item["rationale"],
+                supporting_signals=item["supporting_signals"],
+                confidence=m.HypothesisConfidence(item["confidence"]),
+                what_would_confirm=item["what_would_confirm"],
+                what_would_refute=item["what_would_refute"],
+                why_ranked_here=item["why_ranked_here"],
+            )
+            self.session.add(hypothesis)
+            rows.append(hypothesis)
+        self.session.flush()
+        return rows
+
+    def get_by_run_id(self, run_id: str) -> list[m.Hypothesis]:
+        return list(
+            self.session.scalars(
+                select(m.Hypothesis)
+                .where(m.Hypothesis.run_id == run_id)
+                .order_by(m.Hypothesis.rank)
+            )
+        )
+
+    def get_similar_past_hypotheses(
+        self,
+        supplier_id: int | None,
+        region: str | None,
+        exclude_run_id: str,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Cross-incident memory: the top-ranked hypothesis from each of
+        the most recent OTHER investigation runs sharing this incident's
+        supplier and/or region, whose Phase 2 has already completed.
+        Gives the Hypothesis Agent real historical context instead of
+        reasoning about every incident in total isolation. Returns []
+        when there's no supplier/region to match on, or no prior runs
+        exist yet -- never fabricated."""
+        if supplier_id is None and region is None:
+            return []
+
+        match_conditions = []
+        if supplier_id is not None:
+            match_conditions.append(m.Order.supplier_id == supplier_id)
+        if region:
+            match_conditions.append(m.Location.region == region)
+
+        stmt = (
+            select(
+                m.InvestigationRun.run_id,
+                m.Incident.id,
+                m.IncidentIntake.incident_type,
+                m.IncidentIntake.severity,
+                m.Hypothesis.statement,
+                m.Hypothesis.confidence,
+                m.InvestigationRun.started_at,
+            )
+            .select_from(m.Hypothesis)
+            .join(m.InvestigationRun, m.InvestigationRun.run_id == m.Hypothesis.run_id)
+            .join(m.Incident, m.Incident.id == m.InvestigationRun.incident_id)
+            .join(m.Shipment, m.Shipment.id == m.Incident.shipment_id)
+            .join(m.Order, m.Order.id == m.Shipment.order_id)
+            .outerjoin(m.Customer, m.Customer.id == m.Order.customer_id)
+            .outerjoin(m.Location, m.Location.id == m.Customer.location_id)
+            .outerjoin(m.IncidentIntake, m.IncidentIntake.run_id == m.InvestigationRun.run_id)
+            .where(
+                m.Hypothesis.rank == 1,
+                m.InvestigationRun.run_id != exclude_run_id,
+                m.InvestigationRun.current_stage == m.InvestigationStage.HYPOTHESIS_GENERATED,
+                or_(*match_conditions),
+            )
+            .order_by(m.InvestigationRun.started_at.desc())
+            .limit(limit)
+        )
+        rows = self.session.execute(stmt).all()
+        return [
+            {
+                "run_id": row.run_id,
+                "incident_id": row.id,
+                "incident_type": row.incident_type,
+                "severity": row.severity.value if row.severity else None,
+                "top_hypothesis": row.statement,
+                "confidence": row.confidence.value,
+            }
+            for row in rows
+        ]
